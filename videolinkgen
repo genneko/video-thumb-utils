@@ -1,0 +1,147 @@
+#!/usr/bin/env perl
+#
+# videolinkgen - creates video symlinks in year-by-year subdirs under destdir,
+#                    which point to the new video files in srcdir.
+#                also deletes broken symlinks in destdir,
+#                    which point to the deleted video files in srcdir.
+#
+use strict;
+use utf8;
+use open qw(:std :utf8);
+use Encode;
+use File::Find;
+use File::Spec;
+use FindBin;
+
+my $EXTS = "avi|3gp|mp4|m4v|ts|mts|m2ts|wmv|mpg|mpeg|mov";
+my @errors;
+my $created;
+my $deleted;
+
+if(@ARGV < 2){
+    usage_exit();
+}
+
+my($srcdir, $destdir) = map { Encode::decode('utf8', $_); } @ARGV;
+
+if(! (-e $srcdir && -d $srcdir && -r $srcdir && -x $srcdir)){
+    usage_exit("Specified source directory [$srcdir] is non-existent or inaccessible.\n");
+}
+if(! (-e $destdir && -d $destdir && -r $destdir && -x $destdir)){
+    usage_exit("Specified destination directory [$destdir] is non-existent or inaccessible.\n");
+}
+
+$srcdir = File::Spec->rel2abs($srcdir);
+$destdir = File::Spec->rel2abs($destdir);
+my $realsrcdir = Encode::decode('utf8', readlink_f($srcdir));
+my $realdestdir = Encode::decode('utf8', readlink_f($destdir));
+printf("srcdir = %s (%s)\n", $srcdir, $realsrcdir);
+printf("destdir = %s (%s)\n", $destdir, $realdestdir);
+
+if(index($realdestdir, "$realsrcdir/") == 0){
+    usage_exit("Specified destination directory [$destdir ($realdestdir)] is under the source directory [$srcdir ($realsrcdir)].\n");
+}
+
+# Check and link new files.
+find(\&wanted, $realsrcdir);
+# Check and delete broken links (for deleted files)
+find(\&wanted_delete, $realdestdir);
+printf("%d created, %d deleted, %d error%s.\n", $created, $deleted, scalar(@errors), @errors > 1 ? "s" : "");
+for(my $i = 0; $i < @errors; $i++){
+    print $errors[$i];
+}
+
+sub usage_exit{
+    print @_;
+    print<<EOB;
+usage: $FindBin::Script <srcdir> <destdir>
+
+example:
+  Create symlinks in ~/Videos/{2000,2001,...,etc}
+  which point to the video files under ~/Pictures directory.
+
+  \$ videolinkgen ~/Pictures ~/Videos
+
+EOB
+    exit 1;
+}
+
+sub readlink_f{
+    my($src) = @_;
+    my($dest) = `readlink -f '$src'`;
+    chomp($dest);
+    return $dest;
+}
+
+sub getyear{
+    my($file) = @_;
+    my(@s) = stat($file);
+    my(@ct) = localtime($s[10]);
+    my(@mt) = localtime($s[9]);
+    my $cyear = $ct[5] + 1900;
+    my $myear = $mt[5] + 1900;
+    if($cyear > 1970){
+        return $cyear;
+    }elsif($myear > 1970){
+        return $myear;
+    }else{
+        return 1970;
+    }
+}
+
+sub wanted{
+    my $fullpath = Encode::decode('utf8', $File::Find::name);
+    my $dirname  = Encode::decode('utf8', $File::Find::dir);
+    my $filename = Encode::decode('utf8', $_);
+    if(-f $fullpath && $filename =~ /\.(${EXTS})$/i){
+        my($pdirname, $year, $folder, $linkname);
+        $pdirname = $dirname;
+        $pdirname =~ s|^.*/||;
+        if(substr($pdirname,0, 4) =~ /(19|20)\d\d/){
+            $year = substr($pdirname, 0, 4);
+        }else{
+            $year = getyear($fullpath);
+            if($year == 1970){
+                $year = "unknown";
+            }
+        }
+        $folder = sprintf("%s/%s", $destdir, $year);
+        $linkname = sprintf("%s_%s", $pdirname, $filename);
+        if(! -e $folder){
+            mkdir($folder);
+            printf("[NOTICE] Create $folder\n");
+        }
+        if(-e "$folder/$linkname"){
+            if(-l "$folder/$linkname"){
+                my $linktarget = readlink_f("$folder/$linkname");
+                if($linktarget eq $fullpath){
+                    printf("[INFO] Symlink %s exists. Already linked to %s\n", "$folder/$linkname", $fullpath);
+                }else{
+                    push(@errors, sprintf("[ERROR] Symlink %s exists. Linked to %s instead of %s\n", "$folder/$linkname", $linktarget, $fullpath));
+                    print $errors[$#errors];
+                }
+            }else{
+                push(@errors, sprintf("[ERROR] Something non-symlink %s exists. Cannot link to %s\n", "$folder/$linkname", $fullpath));
+                print $errors[$#errors];
+            }
+        }else{
+            system('ln', '-s', $fullpath, "$folder/$linkname");
+            printf("[NOTICE] Link %s -> %s\n", "$folder/$linkname", $fullpath);
+            $created++;
+        }
+    }
+}
+
+sub wanted_delete{
+    my $fullpath = Encode::decode('utf8', $File::Find::name);
+    my $dirname  = Encode::decode('utf8', $File::Find::dir);
+    my $filename = Encode::decode('utf8', $_);
+    if($filename =~ /\.(${EXTS})$/i){
+        if(-l $fullpath and not -e readlink($fullpath)){
+            unlink $fullpath;
+            printf("[NOTICE] Deleted %s (broken link)\n", $fullpath);
+            $deleted++;
+        }
+    }
+}
+
