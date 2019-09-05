@@ -13,14 +13,23 @@ use File::Find;
 use File::Spec;
 use FindBin;
 
-my $EXTS = "avi|3gp|mp4|m4v|ts|mts|m2ts|wmv|mpg|mpeg|mov";
-my @errors;
-my $created;
-my $deleted;
+use Getopt::Long qw(:config posix_default no_ignore_case gnu_compat);
+# Enable short option bundling like -avo.
+Getopt::Long::Configure("bundling");
+
+my $dryrun;
+GetOptions(
+    "dry-run|n" => \$dryrun,
+);
 
 if(@ARGV < 2){
     usage_exit();
 }
+
+my $EXTS = "avi|3gp|mp4|m4v|ts|mts|m2ts|wmv|mpg|mpeg|mov";
+my @errors;
+my $created;
+my $deleted;
 
 my($srcdir, $destdir) = map { Encode::decode('utf8', $_); } @ARGV;
 
@@ -46,15 +55,21 @@ if(index($realdestdir, "$realsrcdir/") == 0){
 find(\&wanted, $realsrcdir);
 # Check and delete broken links (for deleted files)
 find(\&wanted_delete, $realdestdir);
-printf("%d created, %d deleted, %d error%s.\n", $created, $deleted, scalar(@errors), @errors > 1 ? "s" : "");
+printf("%s%d created, %d deleted, %d error%s.\n", dr(), $created, $deleted, scalar(@errors), @errors > 1 ? "s" : "");
 for(my $i = 0; $i < @errors; $i++){
     print $errors[$i];
+}
+
+sub dr{
+    return ($dryrun ? "(dry-run)" : "");
 }
 
 sub usage_exit{
     print @_;
     print<<EOB;
-usage: $FindBin::Script <srcdir> <destdir>
+usage: $FindBin::Script [options] <srcdir> <destdir>
+options:
+       -n, --dry-run: Do nothing. Just a dry run.
 
 example:
   Create symlinks in ~/Videos/{2000,2001,...,etc}
@@ -108,8 +123,8 @@ sub wanted{
         $folder = sprintf("%s/%s", $destdir, $year);
         $linkname = sprintf("%s_%s", $pdirname, $filename);
         if(! -e $folder){
-            mkdir($folder);
-            printf("[NOTICE] Create $folder\n");
+            mkdir($folder) unless $dryrun;
+            printf("[NOTICE%s] Create %s\n", dr(), $folder);
         }
         if(-e "$folder/$linkname"){
             if(-l "$folder/$linkname"){
@@ -125,8 +140,8 @@ sub wanted{
                 print $errors[$#errors];
             }
         }else{
-            system('ln', '-s', $fullpath, "$folder/$linkname");
-            printf("[NOTICE] Link %s -> %s\n", "$folder/$linkname", $fullpath);
+            system('ln', '-s', $fullpath, "$folder/$linkname") unless $dryrun;
+            printf("[NOTICE%s] Link %s -> %s\n", dr(), "$folder/$linkname", $fullpath);
             $created++;
         }
     }
@@ -138,8 +153,8 @@ sub wanted_delete{
     my $filename = Encode::decode('utf8', $_);
     if($filename =~ /\.(${EXTS})$/i){
         if(-l $fullpath and not -e readlink($fullpath)){
-            unlink $fullpath;
-            printf("[NOTICE] Deleted %s (broken link)\n", $fullpath);
+            unlink $fullpath unless $dryrun;
+            printf("[NOTICE%s] Deleted %s (broken link)\n", dr(), $fullpath);
             $deleted++;
         }
     }
