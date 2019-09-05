@@ -1,0 +1,44 @@
+#!/bin/sh
+#
+# thumbname
+#   calculate XDG thumbnail filename for the specified file.
+#
+prog=$(basename $0)
+bindir=$(dirname $(readlink -f $0))
+
+echoerr() {
+	echo "$@" >&2
+}
+
+usage_exit(){
+	echoerr "usage: $prog [-v] TargetFile"
+	echoerr "       $prog -h"
+	echoerr
+	exit 1
+}
+
+verbose=0
+while getopts "vh" opt
+do
+	case "$opt" in
+		v) verbose=1 ;;
+		h|*) usage_exit ;;
+	esac
+done
+shift $(( $OPTIND - 1 ))
+
+target=$1
+if [ -n "$target" ]; then
+	if echo "$target" | grep -qv ^/; then
+		realpath="file://"$(readlink -f "$target")
+	else
+		realpath="file://$target"
+	fi
+	if [ $verbose -eq 1 ]; then
+		echoerr "[$realpath]"
+	fi
+	echo $(md5 -q -s "$realpath").png
+else
+	usage_exit
+fi
+
